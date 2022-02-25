@@ -15,19 +15,20 @@
     * [1.2 CLI requirements](#12-cli-requirements)
     * [1.3 Warm Restart requirements ](#13-warm-restart-requirements)
     * [1.4 Scaling requirements ](#14-scaling-requirements)
-  * [2 Modules Design](#2-modules-design)
-    * [2.1 Config DB](#21-config-db)
-    * [2.2 App DB](#22-app-db)
-    * [2.3 Module Interaction](#23-module-interaction)
-    * [2.4 Orchestration Agent](#24-orchestration-agent)
-    * [2.5 CLI](#25-cli)
-    * [2.6 Test Plan](#26-test-plan)
+  * [2 Packet Flows](#2-packet-flows)
+  * [3 Modules Design](#3-modules-design)
+    * [3.1 Config DB](#31-config-db)
+    * [3.2 App DB](#32-app-db)
+    * [3.3 Module Interaction](#33-module-interaction)
+    * [3.4 CLI](#34-cli)
+    * [3.5 Test Plan](#35-test-plan)
 
 ###### Revision
 
 | Rev |     Date    |       Author       | Change Description                |
 |:---:|:-----------:|:------------------:|-----------------------------------|
 | 0.1 | 02/01/2022  |     Prince Sunny   | Initial version                   |
+| 0.1 | 02/23/2022  |     Prince Sunny   | Packet Flows                      |
 
 # About this Manual
 This document provides more detailed design of Dash APIs, Dash orchestration agent and the Schemas. General Dash HLD can be found at <TBD> 
@@ -80,13 +81,15 @@ TBD
 |--------------------------|-----------------------------|
 | VNETs         | 1024                         |
 
-# 2 Modules Design
+# 2 Packet Flows
+
+# 3 Modules Design
 
 The following are the schema changes. 
 
-## 2.1 Config DB
+## 3.1 Config DB
 
-### 2.1.1 DEVICE Metadata Table
+### 3.1.1 DEVICE Metadata Table
 
 ```
 "DEVICE_METADATA": {
@@ -99,13 +102,13 @@ The following are the schema changes.
 }
 ```
 
-### 2.1.2 VXLAN Table
+### 3.1.2 VXLAN Table
 ```
 VXLAN_TUNNEL|{{tunnel_name}} 
     "src_ip": {{ip_address}} 
     "dst_ip": {{ip_address}} (OPTIONAL)
 ```
-### 2.1.3 VNET/Interface Table
+### 3.1.3 VNET/Interface Table
   
 ```
 VNET|{{vnet_name}} 
@@ -116,7 +119,7 @@ VNET|{{vnet_name}}
     "advertise_prefix": {{false}} (OPTIONAL)
 ```
 
-## 2.2 APP DB
+## 3.2 APP DB
 
 ### VNET
 
@@ -140,13 +143,13 @@ WEIGHT                   = DIGITS                    ; Weights for the nexthops,
 PROFILE                  = STRING                    ; profile name to be applied for this route, for community  
                                                        string etc (Optional) 
 ```
-## 2.3 Module Interaction
+## 3.3 Module Interaction
 
 A high-level module interaction is captured in the following diagram.
 
   ![dash-high-level-diagram](https://github.com/prsunny/DASH/blob/main/Assets/dash-high-level-design.svg)
   
-### 2.3.1 Sonic host containers
+### 3.3.1 Sonic host containers
 
 The following containers shall be enabled for sonichost and part of the image. Switch specific containers shall be disabled for the image built for the appliance card.
   
@@ -169,12 +172,12 @@ The following containers shall be enabled for sonichost and part of the image. S
 |	Resttapi | No |
 |	gNMI | Yes |
 
-### 2.3.2 DashOrch (Overlay)
+### 3.3.2 DashOrch (Overlay)
 A new orchestration agent "dashorch" shall be implemented that subscribes to DASH CONFIG_DB/APP_DB objects and programs the ASIC_DB via the SAI DASH API. Dashorch shall have sub-orchestrations to handle ACLs, Routes, CA-PA mappings. DASH orchestration agent shall write the state of each tables to STATEDB that applications shall utilize to fetch the programmed status of configured objects.
   
 DASH APIs shall be exposed as gNMI interface and part of the Sonic gNMI container. Clients shall configure the Sonic via gRPC get/set calls. gNMI container has the config backend to translate/write  DASH objects to CONFIG_DB and/or APP_DB.
 
-### 2.3.3 SWSS Lite (Underlay)
+### 3.3.3 SWSS Lite (Underlay)
 Sonic for DASH shall have a lite swss initialization without the heavy-lift of existing switch based orchestration agents that Sonic currently have. The initialization shall be based on switch_type "dpu". For the underlay support, the following SAI APIs are expected to be supported:
   
 | Component                | SAI attribute                                         |
@@ -249,7 +252,7 @@ Sonic for DASH shall have a lite swss initialization without the heavy-lift of e
 |                          | SAI_SWITCH_ATTR_VXLAN_DEFAULT_PORT  |  
 |                          | SAI_SWITCH_ATTR_VXLAN_DEFAULT_ROUTER_MAC |  
 
-## 2.5 CLI
+## 3.4 CLI
 
 The following commands shall be modified/added :
 
@@ -258,4 +261,4 @@ The following commands shall be modified/added :
 	- show dash acls
 ```
 
-## 2.6 Test Plan
+## 3.5 Test Plan
