@@ -1,6 +1,6 @@
 # DASH Sonic Orchestration HLD
 ## High Level Design Document
-### Rev 0.1
+### Rev 0.2
 
 # Table of Contents
 
@@ -18,7 +18,7 @@
   * [2 Packet Flows](#2-packet-flows)
   * [3 Modules Design](#3-modules-design)
     * [3.1 Config DB](#31-config-db)
-    * [3.2 App DB](#32-app-db)
+    * [3.2 App DB](#32-dash-app-db)
     * [3.3 Module Interaction](#33-module-interaction)
     * [3.4 CLI](#34-cli)
     * [3.5 Test Plan](#35-test-plan)
@@ -28,10 +28,11 @@
 | Rev |     Date    |       Author       | Change Description                |
 |:---:|:-----------:|:------------------:|-----------------------------------|
 | 0.1 | 02/01/2022  |     Prince Sunny   | Initial version                   |
-| 0.1 | 02/23/2022  |     Prince Sunny   | Packet Flows                      |
+| 0.2 | 03/09/2022  |     Prince Sunny   | Packet Flows/DB Objects           |
+
 
 # About this Manual
-This document provides more detailed design of Dash APIs, Dash orchestration agent and the Schemas. General Dash HLD can be found at <TBD> 
+This document provides more detailed design of Dash APIs, Dash orchestration agent and the Schemas. General Dash HLD can be found at [dash_hld](https://github.com/Azure/DASH/blob/main/documentation/general/design/dash-high-level-design.md) 
 
 # Definitions/Abbreviation
 ###### Table 1: Abbreviations
@@ -65,27 +66,55 @@ At a high level the following should be supported:
 
   Phase #2
     - Private Link
+    - Service Tunnel
     - Overlay IPv6 
-    - Rest of features
   
 
 ## 1.2 CLI requirements
+Initial support is only for `show` commands
+
 - User should be able to show the DASH configured objects
 
 ## 1.3 Warm Restart requirements
-No special handling for Warm restart support.
+Warm-restart support is not considered in Phase #1. TBD
 
 ## 1.4 Scaling requirements
-TBD  
+Following are the minimal scaling requirements
 | Item                     | Expected value              |
 |--------------------------|-----------------------------|
 | VNETs         | 1024                         |
+| ENI         | 8                         |
+| Routes per ENI         | 100k                         |
+| NSGs per ENI         | 6                         |
+| ACLs per ENI         | 6x100K prefixes                        |
+| ACLs per ENI         | 6x10K SRC/DST ports                        |
+| CA-PA Mappings         | 10M                      |
 
 # 2 Packet Flows
+	
+The following section captures at a high-level on the VNET packet flow. Detailed lookup and pipeline behavior can be referenced *here*.
 
+## 2.1 Outbound packet processing pipeline
+	
+   ![dash-outbound](https://github.com/prsunny/DASH/blob/main/Assets/flow_outbound.png)
+	
+Based on the incoming packet's VNI matched against the reserved VNI assigned for VM->Appliance, the pipeline shall set the direction as TX(Outbound) and using the inner src-mac, maps to the corresponding ENI.The incoming packet will always be vxlan encapped and outer dst-ip is the appliance VIP. The pipeline shall parse the VNI, and for VM traffic, the VNI shall be a special reserved VNI. Everything else shall be treated as as network traffic(RX). Pipeline shall use VNI to differentiate the traffic to be VM (Inbound) or Network (Outbound).
+
+In the outbound flow, the appliance shall assume it is the first appliance to apply policy. It applies the outbound ACLs in three stages (VNIC, Subnet and VNET), processed in order, with the outcome being the most restrictive of the three ACLs combined. 
+
+After the ACL stage, it does LPM routing based on the inner dst-ip and applies the respective action (encap, subsequent CA-PA mapping). Finally, update the connection tracking table for both inbound and outbound. 
+	
+## 2.2 Inbound packet processing pipeline
+	
+   ![dash-intbound](https://github.com/prsunny/DASH/blob/main/Assets/flow_inbound.png)
+
+Based on the incoming packet's VNI, if it does not match against any reserved VNI, the pipeline shall set the direction as RX(Inbound) and using the inner dst-mac, maps to the corresponding ENI. In the inbound flow, Routing (LPM) lookup happens first based on the inner dst-ip and does a CA-PA validation based on the mapping. After LPM is the three stage ACL, processed in order. ACLs can have multiple src/dst IP ranges or port ranges as match criteria.
+	
+It is worth noting that CA-PA mapping table shall be used for both encap and decap process
+	
 # 3 Modules Design
 
-The following are the schema changes. 
+The following are the schema changes. The NorthBound APIs shall be defined as sonic-yang in compliance to [yang-guideline](https://github.com/Azure/SONiC/blob/master/doc/mgmt/SONiC_YANG_Model_Guidelines.md)
 
 ## 3.1 Config DB
 
@@ -108,41 +137,168 @@ VXLAN_TUNNEL|{{tunnel_name}}
     "src_ip": {{ip_address}} 
     "dst_ip": {{ip_address}} (OPTIONAL)
 ```
-### 3.1.3 VNET/Interface Table
+### 3.1.3 VNET
   
 ```
-VNET|{{vnet_name}} 
+DASH_VNET|{{vnet_name}} 
     "vxlan_tunnel": {{tunnel_name}}
     "vni": {{vni}} 
-    "scope": {{"default"}} (OPTIONAL)
+    "guid": {{"string"}}
+    "address_spaces": {{[list of addresses]}} (OPTIONAL)
     "peer_list": {{vnet_name_list}} (OPTIONAL)
-    "advertise_prefix": {{false}} (OPTIONAL)
 ```
 
-## 3.2 APP DB
+### 3.1.4 QOS
+  
+```
+DASH_QOS|{{qos_name}} 
+    "qos_id": {{string}}
+    "bw": {{bw}} 
+    "cps": {{cps}}
+    "flows": {{flows}}
+```
+```
+key                      = DASH_QOS|qos_name ; Qos name as key
+; field                  = value 
+bw                       = bandwidth in kbps
+cps                      = Number of connection per second
+flows                    = Number of flows
+```
 
-### VNET
+### 3.1.5 ENI
+  
+```
+DASH_ENI|{{eni}} 
+    "eni_id": {{string}}
+    "mac_address": {{mac_address}} 
+    "qos": {{qos_name}}
+    "vnet": {{[list of vnets]}}
+```
+```
+key                      = DASH_ENI|eni ; ENI MAC as key
+; field                  = value 
+mac_address              = MAC address as string
+qos                      = Associated Qos profile
+vnet                     = list of Vnets that ENI belongs to
+```
+### 3.1.6 ACL
+  
+```
+DASH_ACL_V4_IN|{{eni}} 
+    "stage": {{stage}}
+    "acl_group_id": {{group_id}} 
+```
+```
+DASH_ACL_V4_OUT|{{eni}} 
+    "stage": {{stage}}
+    "acl_group_id": {{group_id}} 
+```
 
-The following are the changes for Vnet Route table
+```
+key                      = DASH_ACL_V4_IN|eni ; ENI MAC as key
+; field                  = value 
+stage                    = ACL stage {1, 2, 3 ..}
+acl_group_id             = ACL group ID
+```
+
+```
+DASH_ACL_GROUP|{{group_id}} 
+    "ip_version": {{ipv4/ipv6}}
+```
+
+```
+DASH_ACL_RULE|{{group_id}}|{{rule_num}}
+    "priority": {{priority}}
+    "action": {{action}}
+    "terminating": {{bool}}
+    "protocol": {{list of protocols}}
+    "src_addr": {{list of address}}
+    "dst_addr": {{list of address}}
+    "src_port": {{list of range of ports}}
+    "dst_port": {{list of range of ports}}
+    
+```
+
+```
+key                      = DASH_ACL_RULE|group_id|rule_num ; unique rule num within the group.
+; field                  = value 
+priority                 = INT32 value  ; priority of the rule, lower the value, higher the priority
+action                   = allow/deny
+terminating              = true/false   ; if true, stop processing further rules
+protocols                = list of INT ',' separated; E.g. 6-udp, 17-tcp
+src_addr                 = list of source ip prefixes ',' separated
+dst_addr                 = list of destination ip prefixes ',' separated
+src_port                 = list of range of source ports ',' separated
+dst_port                 = list of range of destination ports ',' separated
+```
+
+### 3.1.7 ROUTING TYPE
+	
+```
+DASH_ROUTING_TYPE|{{routing_type}} 
+    "action_type": {{list of actions}}
+    "encap_type": {{list of encap types}} (OPTIONAL)
+    "vni": {{list of vni}} (OPTIONAL)
+```
+
+```
+key                      = DASH_ROUTING_TYPE|routing_type ; routing type can be {direct, vpc, vpc_direct, appliance, privatelink, privatelinknsg, servicetunnel}
+; field                  = value 
+action_type              = list of actions ',' separated, space for empty/no - {maprouting, direct, staticencap, appliance, 4to6, mapdecap, decap, drop}
+encap_type               = encap type depends on the action_type - {vxlan, nvgre}
+vni                      = vni value associated with the corresponding action. Applicable if encap_type is specified. 
+```
+
+## 3.2 DASH APP DB
+
+### 3.2.1 ROUTE TABLE
 
 ``` 
-VNET_ROUTE_TUNNEL_TABLE:{{vnet_name}}:{{prefix}} 
-    "endpoint": {{ip_address}} 
-    "mac_address":{{mac_address}} (OPTIONAL) 
-    "vni": {{vni}}(OPTIONAL) 
+DASH_ROUTE_TABLE:{{eni}}:{{prefix}} 
+    "action_type": {{routing_type}} 
+    "vnet":{{vnet_name}} (OPTIONAL)
+    "appliance":{{appliance_id}} (OPTIONAL)
+    "overlay_ip":{{ip_address}} (OPTIONAL)
+    "underlay_ip":{{ip_address}} (OPTIONAL)
+    "overlay_sip":{{ip_address}} (OPTIONAL)
+    "underlay_dip":{{ip_address}} (OPTIONAL)
+    "customer_addr":{{ip_address}} (OPTIONAL)
+    "metering_bucket": {{bucket_id}}(OPTIONAL) 
 ```
   
 ```
-key                      = VNET_ROUTE_TUNNEL_TABLE:vnet_name:prefix ; Vnet route tunnel table with prefix 
+key                      = DASH_ROUTE_TABLE:eni:prefix ; ENI route table with CA prefix
 ; field                  = value 
-ENDPOINT                 = list of ipv4 addresses    ; comma separated list of endpoints
-ENDPOINT_MONITOR         = list of ipv4 addresses    ; comma separated list of endpoints, space for empty/no monitoring
-MAC_ADDRESS              = 12HEXDIG                  ; Inner dst mac in encapsulated packet 
-VNI                      = DIGITS                    ; VNI value in encapsulated packet 
-WEIGHT                   = DIGITS                    ; Weights for the nexthops, comma separated (Optional) 
-PROFILE                  = STRING                    ; profile name to be applied for this route, for community  
-                                                       string etc (Optional) 
+action_type              = routing_type              ; reference to routing type
+vnet                     = vnet name                 ; vnet name if routing_type is {vpc, vpc_direct}
+appliance                = appliance id              ; appliance id if routing_type is {appliance} 
+overlay_ip               = ip_address                ; overlay_ip to override if routing_type is {servicetunnel}, use dst ip from packet if not specified
+underlay_ip              = ip_address                ; underlay_ip to override if routing_type is {servicetunnel}, use dst ip from packet if not specified
+overlay_sip              = ip_address                ; overlay_sip if routing_type is {servicetunnel}  
+underlay_sip             = ip_address                ; overlay_sip if routing_type is {servicetunnel}
+customer_addr            = ip_address                ; CA address if routing_type is {vpc_direct}
+metering_bucket          = bucket_id                 ; metering and counter
 ```
+
+### 3.2.2 VNET MAPPING TABLE
+
+``` 
+DASH_MAPPING_TABLE:{{vnet}}:{{prefix}} 
+    "routing_type": {{routing_type}} 
+    "underlay_ip":{{ip_address}}
+    "mac_address":{{mac_address}} (OPTIONAL) 
+    "vni": {{vni}}(OPTIONAL)
+    "metering_bucket": {{bucket_id}}(OPTIONAL)
+```
+```
+key                      = DASH_ROUTE_TABLE:eni:prefix ; ENI route table with CA prefix
+; field                  = value 
+action_type              = routing_type              ; reference to routing type
+underlay_ip              = ip_address                ; PA address for the CA
+mac_address              = MAC address as string     ; Inner dst mac
+metering_bucket          = bucket_id                 ; metering and counter
+```
+
 ## 3.3 Module Interaction
 
 A high-level module interaction is captured in the following diagram.
@@ -252,13 +408,22 @@ Sonic for DASH shall have a lite swss initialization without the heavy-lift of e
 |                          | SAI_SWITCH_ATTR_VXLAN_DEFAULT_PORT  |  
 |                          | SAI_SWITCH_ATTR_VXLAN_DEFAULT_ROUTER_MAC |  
 
+### 3.3.4 Memory footprints
+TBD
+
 ## 3.4 CLI
 
-The following commands shall be modified/added :
+The following commands shall be added :
 
 ```
-	- show dash routes all
-	- show dash acls
+	- show dash <eni> routes all
+	- show dash <eni> acls stage <ingress/egress/all>
+	- show dash <vnet> mappings
+	- show dash route-types
+	- show dash qos
+	- show dash vnet brief
 ```
 
 ## 3.5 Test Plan
+
+Refer DASH documentation for the test plan. 
