@@ -82,13 +82,13 @@ Warm-restart support is not considered in Phase #1. TBD
 Following are the minimal scaling requirements
 | Item                     | Expected value              |
 |--------------------------|-----------------------------|
-| VNETs         | 1024                         |
-| ENI         | 8                         |
-| Routes per ENI         | 100k                         |
-| NSGs per ENI         | 6                         |
-| ACLs per ENI         | 6x100K prefixes                        |
-| ACLs per ENI         | 6x10K SRC/DST ports                        |
-| CA-PA Mappings         | 10M                      |
+| VNETs                    | 1024                     |
+| ENI                      | 8                        |
+| Routes per ENI           | 100k                     |
+| NSGs per ENI             | 6                        |
+| ACLs per ENI             | 6x100K prefixes          |
+| ACLs per ENI             | 6x10K SRC/DST ports      |
+| CA-PA Mappings           | 10M                      |
 
 # 2 Packet Flows
 	
