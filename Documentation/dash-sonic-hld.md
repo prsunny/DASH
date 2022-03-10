@@ -1,4 +1,4 @@
-# DASH Sonic HLD
+# SONiC-DASH HLD
 ## High Level Design Document
 ### Rev 0.2
 
@@ -32,13 +32,13 @@
 
 
 # About this Manual
-This document provides more detailed design of Dash APIs, Dash orchestration agent, Config and APP DB Schemas and other Sonic buildimage changes required to bring up Sonic image on an appliance card. General Dash HLD can be found at [dash_hld](https://github.com/Azure/DASH/blob/main/documentation/general/design/dash-high-level-design.md).
+This document provides more detailed design of DASH APIs, DASH orchestration agent, Config and APP DB Schemas and other SONiC buildimage changes required to bring up SONiC image on an appliance card. General DASH HLD can be found at [dash_hld](https://github.com/Azure/DASH/blob/main/documentation/general/design/dash-high-level-design.md).
 
 # Definitions/Abbreviation
 ###### Table 1: Abbreviations
 |                          |                                |
 |--------------------------|--------------------------------|
-| DASH                     | Disaggregated APIs for Sonic Hosts |
+| DASH                     | Disaggregated APIs for SONiC Hosts |
 | VNI                      | Vxlan Network Identifier       |
 | VTEP                     | Vxlan Tunnel End Point         |
 | VNET                     | Virtual Network                |
@@ -52,7 +52,7 @@ This document provides more detailed design of Dash APIs, Dash orchestration age
 
 At a high level the following should be supported:
   
-- Bringup Sonic image for DEVICE_METADATA subtype - `appliance`
+- Bringup SONiC image for DEVICE_METADATA subtype - `appliance`
 - Bringup Swss/Syncd containers for switch_type - `dpu`
 - Able to program DASH objects configured via gRPC client to appliance card via SAI DASH API
 
@@ -320,7 +320,7 @@ A high-level module interaction is captured in the following diagram.
 
   ![dash-high-level-diagram](https://github.com/prsunny/DASH/blob/main/Assets/dash-high-level-design.svg)
   
-### 3.3.1 Sonic host containers
+### 3.3.1 SONiC host containers
 
 The following containers shall be enabled for sonichost and part of the image. Switch specific containers shall be disabled for the image built for the appliance card.
   
@@ -343,13 +343,13 @@ The following containers shall be enabled for sonichost and part of the image. S
 |	Resttapi | No |
 |	gNMI | Yes |
 
-### 3.3.2 DashOrch (Overlay)
-A new orchestration agent "dashorch" shall be implemented that subscribes to DASH CONFIG_DB/APP_DB objects and programs the ASIC_DB via the SAI DASH API. Dashorch shall have sub-orchestrations to handle ACLs, Routes, CA-PA mappings. DASH orchestration agent shall write the state of each tables to STATEDB that applications shall utilize to fetch the programmed status of configured objects.
+### 3.3.2 DASHOrch (Overlay)
+A new orchestration agent "dashorch" shall be implemented that subscribes to DASH CONFIG_DB/APP_DB objects and programs the ASIC_DB via the SAI DASH API. DASHOrch shall have sub-orchestrations to handle ACLs, Routes, CA-PA mappings. DASH orchestration agent shall write the state of each tables to STATEDB that applications shall utilize to fetch the programmed status of configured objects.
   
-DASH APIs shall be exposed as gNMI interface and part of the Sonic gNMI container. Clients shall configure the Sonic via gRPC get/set calls. gNMI container has the config backend to translate/write  DASH objects to CONFIG_DB and/or APP_DB.
+DASH APIs shall be exposed as gNMI interface and part of the SONiC gNMI container. Clients shall configure the SONiC via gRPC get/set calls. gNMI container has the config backend to translate/write  DASH objects to CONFIG_DB and/or APP_DB.
 
 ### 3.3.3 SWSS Lite (Underlay)
-Sonic for DASH shall have a lite swss initialization without the heavy-lift of existing switch based orchestration agents that Sonic currently have. The initialization shall be based on switch_type "dpu". For the underlay support, the following SAI APIs are expected to be supported:
+SONiC for DASH shall have a lite swss initialization without the heavy-lift of existing switch based orchestration agents that SONiC currently have. The initialization shall be based on switch_type "dpu". For the underlay support, the following SAI APIs are expected to be supported:
   
 | Component                | SAI attribute                                         |
 |--------------------------|-------------------------------------------------------|
