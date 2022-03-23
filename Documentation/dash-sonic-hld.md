@@ -18,7 +18,7 @@
   * [2 Packet Flows](#2-packet-flows)
   * [3 Modules Design](#3-modules-design)
     * [3.1 Config DB](#31-config-db)
-    * [3.2 App DB](#32-dash-app-db)
+    * [3.2 Dash DB](#32-dash-app-db)
     * [3.3 Module Interaction](#33-module-interaction)
     * [3.4 CLI](#34-cli)
     * [3.5 Test Plan](#35-test-plan)
@@ -56,7 +56,7 @@ At a high level the following should be supported:
 - Bringup Swss/Syncd containers for switch_type - `dpu`
 - Able to program DASH objects configured via gRPC client to appliance card via SAI DASH API
 
-  Phase #1
+  Phase 1
     - Vnet-Vnet scenario
     - Route/LPM support
     - Underlay IPv4 and IPv6
@@ -64,7 +64,7 @@ At a high level the following should be supported:
     - TCP state tracking on flows
     - Telemetry and Monitoring
 
-  Phase #2
+  Phase 2
     - Private Link
     - Service Tunnel
     - Overlay IPv6 
@@ -76,19 +76,20 @@ Initial support is only for `show` commands
 - User should be able to show the DASH configured objects
 
 ## 1.3 Warm Restart requirements
-Warm-restart support is not considered in Phase #1. TBD
+Warm-restart support is not considered in Phase 1. TBD
 
 ## 1.4 Scaling requirements
 Following are the minimal scaling requirements
 | Item                     | Expected value              |
 |--------------------------|-----------------------------|
 | VNETs                    | 1024                     |
-| ENI                      | 8                        |
+| ENI                      | 32 Per Card              |
 | Routes per ENI           | 100k                     |
 | NSGs per ENI             | 6                        |
 | ACLs per ENI             | 6x100K prefixes          |
 | ACLs per ENI             | 6x10K SRC/DST ports      |
 | CA-PA Mappings           | 10M                      |
+| Active Connections/ENI   | 1M                       |
 
 # 2 Packet Flows
 	
@@ -96,7 +97,7 @@ The following section captures at a high-level on the VNET packet flow. Detailed
 
 ## 2.1 Outbound packet processing pipeline
 	
-   ![dash-outbound](https://github.com/prsunny/DASH/blob/main/Assets/pkt_flow_outbound.png)
+  ![dash-outbound](https://github.com/prsunny/DASH/blob/main/Assets/pkt_flow_outbound.png)
 	
 Based on the incoming packet's VNI matched against the reserved VNI assigned for VM->Appliance, the pipeline shall set the direction as TX(Outbound) and using the inner src-mac, maps to the corresponding ENI.The incoming packet will always be vxlan encapped and outer dst-ip is the appliance VIP. The pipeline shall parse the VNI, and for VM traffic, the VNI shall be a special reserved VNI. Everything else shall be treated as as network traffic(RX). Pipeline shall use VNI to differentiate the traffic to be VM (Inbound) or Network (Outbound).
 
@@ -116,6 +117,22 @@ It is worth noting that CA-PA mapping table shall be used for both encap and dec
 
 The following are the schema changes. The NorthBound APIs shall be defined as sonic-yang in compliance to [yang-guideline](https://github.com/Azure/SONiC/blob/master/doc/mgmt/SONiC_YANG_Model_Guidelines.md)
 
+For DASH objects, the proposal is to have its own DB instance (DASH_APP_DB). Ref [link](https://github.com/Azure/sonic-buildimage/blob/master/dockers/docker-database/database_config.json.j2), thus ensuring isolation from regular configs that are persistent in the appliance across reboots. All the DASH objects are programmed by SDN and hence treated differently from the existing Sonic L2/L3 'switch' DB ojects 
+
+```
+        "DASH_APP_DB" : {
+            "id" : 15,
+            "separator": ":",
+            "instance" : "redis"
+        }
+	
+	"DASH_STATE_DB" : {
+            "id" : 16,
+            "separator": "|",
+            "instance" : "redis"
+        }
+```
+
 ## 3.1 Config DB
 
 ### 3.1.1 DEVICE Metadata Table
@@ -132,15 +149,23 @@ The following are the schema changes. The NorthBound APIs shall be defined as so
 ```
 
 ### 3.1.2 VXLAN Table
+
 ```
 VXLAN_TUNNEL|{{tunnel_name}} 
     "src_ip": {{ip_address}} 
     "dst_ip": {{ip_address}} (OPTIONAL)
 ```
-### 3.1.3 VNET
+
+## 3.2 DASH APP DB
+
+Following diagram captures the object reference model.
+
+  ![dash-eni-vnet-obj-model](https://github.com/prsunny/DASH/blob/main/Assets/dash_object_model.png)
+
+### 3.2.1 VNET
   
 ```
-DASH_VNET|{{vnet_name}} 
+DASH_VNET:{{vnet_name}} 
     "vxlan_tunnel": {{tunnel_name}}
     "vni": {{vni}} 
     "guid": {{"string"}}
@@ -148,66 +173,66 @@ DASH_VNET|{{vnet_name}}
     "peer_list": {{vnet_name_list}} (OPTIONAL)
 ```
 
-### 3.1.4 QOS
+### 3.2.2 QOS
   
 ```
-DASH_QOS|{{qos_name}} 
+DASH_QOS:{{qos_name}} 
     "qos_id": {{string}}
     "bw": {{bw}} 
     "cps": {{cps}}
     "flows": {{flows}}
 ```
 ```
-key                      = DASH_QOS|qos_name ; Qos name as key
+key                      = DASH_QOS:qos_name ; Qos name as key
 ; field                  = value 
 bw                       = bandwidth in kbps
 cps                      = Number of connection per second
 flows                    = Number of flows
 ```
 
-### 3.1.5 ENI
+### 3.2.3 ENI
   
 ```
-DASH_ENI|{{eni}} 
+DASH_ENI:{{eni}} 
     "eni_id": {{string}}
     "mac_address": {{mac_address}} 
     "qos": {{qos_name}}
     "vnet": {{[list of vnets]}}
 ```
 ```
-key                      = DASH_ENI|eni ; ENI MAC as key
+key                      = DASH_ENI:eni ; ENI MAC as key
 ; field                  = value 
 mac_address              = MAC address as string
 qos                      = Associated Qos profile
 vnet                     = list of Vnets that ENI belongs to
 ```
-### 3.1.6 ACL
+### 3.2.4 ACL
   
 ```
-DASH_ACL_V4_IN|{{eni}} 
+DASH_ACL_V4_IN:{{eni}} 
     "stage": {{stage}}
     "acl_group_id": {{group_id}} 
 ```
 ```
-DASH_ACL_V4_OUT|{{eni}} 
+DASH_ACL_V4_OUT:{{eni}} 
     "stage": {{stage}}
     "acl_group_id": {{group_id}} 
 ```
 
 ```
-key                      = DASH_ACL_V4_IN|eni ; ENI MAC as key
+key                      = DASH_ACL_V4_IN:eni ; ENI MAC as key
 ; field                  = value 
 stage                    = ACL stage {1, 2, 3 ..}
 acl_group_id             = ACL group ID
 ```
 
 ```
-DASH_ACL_GROUP|{{group_id}} 
+DASH_ACL_GROUP:{{group_id}} 
     "ip_version": {{ipv4/ipv6}}
 ```
 
 ```
-DASH_ACL_RULE|{{group_id}}|{{rule_num}}
+DASH_ACL_RULE:{{group_id}}|{{rule_num}}
     "priority": {{priority}}
     "action": {{action}}
     "terminating": {{bool}}
@@ -220,7 +245,7 @@ DASH_ACL_RULE|{{group_id}}|{{rule_num}}
 ```
 
 ```
-key                      = DASH_ACL_RULE|group_id|rule_num ; unique rule num within the group.
+key                      = DASH_ACL_RULE:group_id:rule_num ; unique rule num within the group.
 ; field                  = value 
 priority                 = INT32 value  ; priority of the rule, lower the value, higher the priority
 action                   = allow/deny
@@ -232,41 +257,37 @@ src_port                 = list of range of source ports ',' separated
 dst_port                 = list of range of destination ports ',' separated
 ```
 
-### 3.1.7 ROUTING TYPE
+### 3.2.5 ROUTING TYPE
 	
 ```
-DASH_ROUTING_TYPE|{{routing_type}} 
-    "action_type": {{list of actions}}
-    "encap_type": {{list of encap types}} (OPTIONAL)
+DASH_ROUTING_TYPE:{{routing_type}}:{{action_type}} 
+    "encap_type": {{encap type}} (OPTIONAL)
     "vni": {{list of vni}} (OPTIONAL)
 ```
 
 ```
-key                      = DASH_ROUTING_TYPE|routing_type ; routing type can be {direct, vpc, vpc_direct, appliance, privatelink, privatelinknsg, servicetunnel}
+key                      = DASH_ROUTING_TYPE:routing_type:action_type ; routing type can be {direct, vnet, vnet_direct, appliance, privatelink, privatelinknsg, servicetunnel} action_type can be {maprouting, direct, staticencap, appliance, 4to6, mapdecap, decap, drop}
 ; field                  = value 
-action_type              = list of actions ',' separated, space for empty/no - {maprouting, direct, staticencap, appliance, 4to6, mapdecap, decap, drop}
 encap_type               = encap type depends on the action_type - {vxlan, nvgre}
 vni                      = vni value associated with the corresponding action. Applicable if encap_type is specified. 
 ```
 
-### 3.1.8 APPLIANCE
+### 3.2.6 APPLIANCE
 	
 ```
-DASH_APPLIANCE|{{appliance_id}} 
+DASH_APPLIANCE:{{appliance_id}} 
     "sip": {{ip_address}}
     "vm_vni": {{list of vnis}}
 ```
 
 ```
-key                      = DASH_APPLIANCE|id ; attributes specific for the appliance
+key                      = DASH_APPLIANCE:id ; attributes specific for the appliance
 ; field                  = value 
 sip                      = source ip address, to be used in encap
 vm_vni                   = list of VNIs that need special treatment. Chosen for setting direction etc. 
 ```
 
-## 3.2 DASH APP DB
-
-### 3.2.1 ROUTE TABLE
+### 3.2.7 ROUTE TABLE
 
 ``` 
 DASH_ROUTE_TABLE:{{eni}}:{{prefix}} 
@@ -285,28 +306,27 @@ DASH_ROUTE_TABLE:{{eni}}:{{prefix}}
 key                      = DASH_ROUTE_TABLE:eni:prefix ; ENI route table with CA prefix
 ; field                  = value 
 action_type              = routing_type              ; reference to routing type
-vnet                     = vnet name                 ; vnet name if routing_type is {vpc, vpc_direct}
+vnet                     = vnet name                 ; vnet name if routing_type is {vnet, vnet_direct}
 appliance                = appliance id              ; appliance id if routing_type is {appliance} 
 overlay_ip               = ip_address                ; overlay_ip to override if routing_type is {servicetunnel}, use dst ip from packet if not specified
 underlay_ip              = ip_address                ; underlay_ip to override if routing_type is {servicetunnel}, use dst ip from packet if not specified
 overlay_sip              = ip_address                ; overlay_sip if routing_type is {servicetunnel}  
 underlay_sip             = ip_address                ; overlay_sip if routing_type is {servicetunnel}
-customer_addr            = ip_address                ; CA address if routing_type is {vpc_direct}
+customer_addr            = ip_address                ; CA address if routing_type is {vnet_direct}
 metering_bucket          = bucket_id                 ; metering and counter
 ```
 
-### 3.2.2 VNET MAPPING TABLE
+### 3.2.8 VNET MAPPING TABLE
 
 ``` 
-DASH_MAPPING_TABLE:{{vnet}}:{{prefix}} 
+DASH_MAPPING_TABLE:{{vnet}}:{{ip_address}} 
     "routing_type": {{routing_type}} 
     "underlay_ip":{{ip_address}}
     "mac_address":{{mac_address}} (OPTIONAL) 
-    "vni": {{vni}}(OPTIONAL)
     "metering_bucket": {{bucket_id}}(OPTIONAL)
 ```
 ```
-key                      = DASH_ROUTE_TABLE:eni:prefix ; ENI route table with CA prefix
+key                      = DASH_ROUTE_TABLE:eni:ip_address ; ENI route table with CA IP
 ; field                  = value 
 action_type              = routing_type              ; reference to routing type
 underlay_ip              = ip_address                ; PA address for the CA
@@ -344,9 +364,9 @@ The following containers shall be enabled for sonichost and part of the image. S
 |	gNMI | Yes |
 
 ### 3.3.2 DASHOrch (Overlay)
-A new orchestration agent "dashorch" shall be implemented that subscribes to DASH CONFIG_DB/APP_DB objects and programs the ASIC_DB via the SAI DASH API. DASHOrch shall have sub-orchestrations to handle ACLs, Routes, CA-PA mappings. DASH orchestration agent shall write the state of each tables to STATEDB that applications shall utilize to fetch the programmed status of configured objects.
+A new orchestration agent "dashorch" shall be implemented that subscribes to DASH APP DB objects and programs the ASIC_DB via the SAI DASH API. DASHOrch shall have sub-orchestrations to handle ACLs, Routes, CA-PA mappings. DASH orchestration agent shall write the state of each tables to STATEDB that applications shall utilize to fetch the programmed status of configured objects.
   
-DASH APIs shall be exposed as gNMI interface and part of the SONiC gNMI container. Clients shall configure the SONiC via gRPC get/set calls. gNMI container has the config backend to translate/write  DASH objects to CONFIG_DB and/or APP_DB.
+DASH APIs shall be exposed as gNMI interface and part of the SONiC gNMI container. Clients shall configure the SONiC via gRPC get/set calls. gNMI container has the config backend to translate/write DASH objects to CONFIG_DB and/or DASH APP_DB.
 
 ### 3.3.3 SWSS Lite (Underlay)
 SONiC for DASH shall have a lite swss initialization without the heavy-lift of existing switch based orchestration agents that SONiC currently have. The initialization shall be based on switch_type "dpu". For the underlay support, the following SAI APIs are expected to be supported:
@@ -423,7 +443,10 @@ SONiC for DASH shall have a lite swss initialization without the heavy-lift of e
 |                          | SAI_SWITCH_ATTR_VXLAN_DEFAULT_PORT  |  
 |                          | SAI_SWITCH_ATTR_VXLAN_DEFAULT_ROUTER_MAC |  
 
-### 3.3.4 Memory footprints
+### 3.3.4 Underlay Routing
+DASH Appliance shall establish BGP session with the connected ToR and advertise the prefixes (VIP PA). In turn, the ToR shall advertise default route to appliance. With two ToRs connected, the appliance shall have route with gateway towards both ToRs and does ECMP routing. Orchagent install the route and resolves the neighbor (GW) mac and programs the underlay route/nexthop and neighbor. In the absence of a default-route, appliance shall send the packet back on the same port towards the recieving ToR and can derive the underlay dst mac from the src mac of the received packet or from the neighbor entry (IP/MAC) associated with the port. 
+
+### 3.3.5 Memory footprints
 TBD
 
 ## 3.4 CLI
