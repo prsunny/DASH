@@ -1,0 +1,21 @@
+# Requires <url of sai-challenger branch> <commit sha> or something
+# sc-client:230216
+FROM sc-client
+
+ADD tests/ /tests/
+
+# Copy distro PTF submodule and tools from SAI repo
+ADD SAI/SAI/test/ptf /SAI/test/ptf
+
+# Install PTF test framework & test-cases from SAI repo
+ADD SAI/SAI/ptf /SAI/ptf/
+
+# Install the python libraries
+RUN python3 -m pip install -r /tests/requirements.txt && \
+    pip3 install scapy \
+                 dpugen==0.0.5 \
+                 pysubnettree \
+                 macaddress \
+                 munch
+
+CMD ["/bin/bash"]
